@@ -59,6 +59,9 @@ export function BookingsProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [lastFetched, setLastFetched] = useState<number | null>(null);
   const hydratedRef = useRef(false);
+  const isFetchingRef = useRef(false);
+  const lastFetchedRef = useRef<number | null>(null);
+  const bookingsCountRef = useRef(0);
 
   // Load from cache after hydration (client-side only)
   useEffect(() => {
@@ -68,22 +71,31 @@ export function BookingsProvider({ children }: { children: ReactNode }) {
     const cached = getStoredCache();
     if (cached?.bookings && cached.bookings.length > 0) {
       setBookings(cached.bookings);
+      bookingsCountRef.current = cached.bookings.length;
       const map = new Map<string, Booking>();
       for (const booking of cached.bookings) {
         map.set(booking.id, booking);
       }
       setBookingsMap(map);
       setLastFetched(cached.timestamp);
+      lastFetchedRef.current = cached.timestamp;
       setLoading(false);
     }
   }, []);
 
   const fetchBookings = useCallback(async (force = false) => {
-    // Skip if we have fresh cached data
-    if (!force && lastFetched && Date.now() - lastFetched < CACHE_DURATION && bookings.length > 0) {
+    // Prevent concurrent fetches
+    if (isFetchingRef.current) {
       return;
     }
 
+    // Skip if we have fresh cached data (use refs to avoid dependency issues)
+    if (!force && lastFetchedRef.current && Date.now() - lastFetchedRef.current < CACHE_DURATION && bookingsCountRef.current > 0) {
+      setLoading(false);
+      return;
+    }
+
+    isFetchingRef.current = true;
     setLoading(true);
     setError(null);
 
@@ -98,6 +110,7 @@ export function BookingsProvider({ children }: { children: ReactNode }) {
 
       const fetchedBookings = data.bookings as Booking[];
       setBookings(fetchedBookings);
+      bookingsCountRef.current = fetchedBookings.length;
       
       // Build map for O(1) lookups
       const map = new Map<string, Booking>();
@@ -105,7 +118,10 @@ export function BookingsProvider({ children }: { children: ReactNode }) {
         map.set(booking.id, booking);
       });
       setBookingsMap(map);
-      setLastFetched(Date.now());
+      
+      const now = Date.now();
+      setLastFetched(now);
+      lastFetchedRef.current = now;
       
       // Persist to sessionStorage
       setStoredCache(fetchedBookings);
@@ -114,8 +130,9 @@ export function BookingsProvider({ children }: { children: ReactNode }) {
       console.error(err);
     } finally {
       setLoading(false);
+      isFetchingRef.current = false;
     }
-  }, [lastFetched, bookings.length]);
+  }, []); // Empty deps - uses refs for values that change
 
   const getBooking = useCallback((id: string): Booking | undefined => {
     return bookingsMap.get(id);

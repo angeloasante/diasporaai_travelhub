@@ -140,231 +140,85 @@ class VfsBotDE(VfsBot):
             if not password_input:
                 raise LoginError("Could not find password input field")
 
-            # Fill credentials using Playwright's native methods which properly trigger Angular forms
-            # Angular reactive forms require actual keyboard events, not just DOM value changes
+            # Fill credentials using JavaScript to bypass overlay completely
             logging.info(f"Filling email: {email[:3]}***{email[-10:]}")
             remove_overlay()
             
-            # Determine the correct modifier key (Meta for macOS, Control for others)
-            import platform
-            mod_key = "Meta" if platform.system() == "Darwin" else "Control"
-            
-            # Use page.keyboard.type() which properly triggers Angular form controls
-            # This simulates real keyboard input character by character
-            try:
-                # Click to focus the email field
-                email_input.click()
-                time.sleep(0.2)
-                
-                # Clear any existing value
-                page.keyboard.press(f"{mod_key}+a")
-                page.keyboard.press("Backspace")
-                time.sleep(0.1)
-                
-                # Type email character by character - this triggers Angular properly
-                page.keyboard.type(email, delay=30)
-                time.sleep(0.3)
-                
-                # Verify email was typed
-                typed_email = email_input.input_value()
-                logging.info(f"Email field value length after typing: {len(typed_email)}")
-                
-                logging.info("Email filled using page.keyboard.type()")
-            except Exception as e:
-                logging.warning(f"Email keyboard fill failed: {e}, using JavaScript fallback")
-                # JavaScript fallback with Angular-specific event dispatching
-                page.evaluate(f"""
-                    const emailInput = document.querySelector('input[formcontrolname="username"]');
-                    if (emailInput) {{
-                        emailInput.focus();
-                        emailInput.value = '';
-                        emailInput.value = '{email}';
-                        emailInput.dispatchEvent(new InputEvent('input', {{ bubbles: true, data: '{email}', inputType: 'insertText' }}));
-                        emailInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                        emailInput.dispatchEvent(new Event('blur', {{ bubbles: true }}));
-                    }}
-                """)
+            # Use JavaScript to fill email - bypasses all overlays
+            page.evaluate(f"""
+                const emailInput = document.querySelector('input[formcontrolname="username"]');
+                if (emailInput) {{
+                    emailInput.focus();
+                    emailInput.value = '{email}';
+                    emailInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    emailInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                }}
+            """)
+            time.sleep(0.5)
             
             logging.info("Filling password...")
             remove_overlay()
             
-            try:
-                # Scroll password field into view and verify it's visible
-                password_input.scroll_into_view_if_needed()
-                time.sleep(0.2)
-                
-                # Click directly on the password input to focus it
-                password_input.click()
-                time.sleep(0.3)
-                
-                # Verify we have focus on the password field
-                focused_element = page.evaluate("() => document.activeElement?.getAttribute('formcontrolname') || document.activeElement?.tagName")
-                logging.info(f"Active element after password click: {focused_element}")
-                
-                # Clear any existing value
-                page.keyboard.press(f"{mod_key}+a")
-                page.keyboard.press("Backspace")
-                time.sleep(0.1)
-                
-                # Type password character by character
-                page.keyboard.type(password, delay=30)
-                time.sleep(0.3)
-                
-                # Verify password was typed
-                typed_password = password_input.input_value()
-                logging.info(f"Password field value length after typing: {len(typed_password)}")
-                
-                # Click elsewhere to trigger blur/validation (click on form, not Tab)
-                page.locator("form").first.click(position={"x": 10, "y": 10})
-                time.sleep(0.3)
-                
-                logging.info("Password filled using page.keyboard.type()")
-            except Exception as e:
-                logging.warning(f"Password keyboard fill failed: {e}, using JavaScript fallback")
-                page.evaluate(f"""
-                    const passInput = document.querySelector('input[formcontrolname="password"]');
-                    if (passInput) {{
-                        passInput.focus();
-                        passInput.value = '';
-                        passInput.value = '{password}';
-                        passInput.dispatchEvent(new InputEvent('input', {{ bubbles: true, data: '{password}', inputType: 'insertText' }}));
-                        passInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                        passInput.dispatchEvent(new Event('blur', {{ bubbles: true }}));
-                    }}
-                """)
-            
-            time.sleep(0.5)
+            # Use JavaScript to fill password - bypasses all overlays
+            page.evaluate(f"""
+                const passInput = document.querySelector('input[formcontrolname="password"]');
+                if (passInput) {{
+                    passInput.focus();
+                    passInput.value = '{password}';
+                    passInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    passInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                }}
+            """)
+            time.sleep(1)
             
             # Verify fields were filled
             email_value = email_input.input_value()
             password_value = password_input.input_value()
             logging.info(f"Email field has {len(email_value)} chars, password field has {len(password_value)} chars")
-            
-            # NEW APPROACH: Try to click Sign In immediately - this may trigger Turnstile to render
-            # VFS's Angular app might only render Turnstile when form interaction happens
-            logging.info("Attempting to click Sign In to trigger CAPTCHA...")
-            
-            try:
-                sign_in_btn = page.locator("button:has-text('Sign In')").first
-                
-                # Check if button is already enabled (no CAPTCHA needed)
-                if not sign_in_btn.is_disabled():
-                    logging.info("Sign In button is enabled - clicking...")
-                    sign_in_btn.click()
-                    time.sleep(3)
+
+            # Inject a turnstile interceptor BEFORE waiting for widget to capture sitekey
+            page.evaluate("""
+                () => {
+                    // Store captured sitekeys
+                    window.__capturedTurnstileSitekeys = window.__capturedTurnstileSitekeys || [];
                     
-                    # Check if we navigated away from login
-                    if "login" not in page.url.lower():
-                        logging.info("Login successful without CAPTCHA!")
-                        return  # Success!
-                else:
-                    logging.info("Sign In button is disabled - CAPTCHA likely required")
-                    
-                    # NUCLEAR OPTION: Try to submit form directly via Angular
-                    # This bypasses the disabled button and forces form submission
-                    login_result = page.evaluate(f"""
-                        () => {{
-                            try {{
-                                // Method 1: Find Angular form and submit it directly
-                                const form = document.querySelector('form');
-                                if (form) {{
-                                    // Try to mark form as valid and submit
-                                    form.classList.remove('ng-invalid');
-                                    form.classList.add('ng-valid', 'ng-dirty', 'ng-touched');
-                                    
-                                    // Enable the submit button
-                                    const btn = form.querySelector('button[type="submit"]');
-                                    if (btn) {{
-                                        btn.disabled = false;
-                                        btn.removeAttribute('disabled');
-                                    }}
-                                    
-                                    // Dispatch submit event
-                                    const submitEvent = new Event('submit', {{ bubbles: true, cancelable: true }});
-                                    form.dispatchEvent(submitEvent);
-                                    return 'form_submitted';
-                                }}
-                                
-                                // Method 2: Try to call VFS's login API directly
-                                // This would bypass the form entirely
-                                return 'no_form_found';
-                            }} catch(e) {{
-                                return 'error: ' + e.message;
-                            }}
-                        }}
-                    """)
-                    logging.info(f"Form submit attempt result: {login_result}")
-                    time.sleep(2)
-                    
-                    # Check if we navigated
-                    if "login" not in page.url.lower():
-                        logging.info("Login successful after form submit!")
-                        return
-                    
-                    # Check if Turnstile rendered after the submit attempt
-                    iframe_after_submit = page.evaluate("""
-                        () => {
-                            const iframes = document.querySelectorAll('iframe');
-                            for (const f of iframes) {
-                                if (f.src && f.src.includes('challenges.cloudflare')) {
-                                    return f.src;
-                                }
+                    // Intercept turnstile.render if it exists
+                    if (window.turnstile && window.turnstile.render) {
+                        const originalRender = window.turnstile.render;
+                        window.turnstile.render = function(container, params) {
+                            if (params && params.sitekey) {
+                                window.__capturedTurnstileSitekeys.push(params.sitekey);
+                                console.log('Captured Turnstile sitekey:', params.sitekey);
                             }
-                            return null;
-                        }
-                    """)
-                    if iframe_after_submit:
-                        logging.info(f"Turnstile rendered after submit! iframe src: {iframe_after_submit[:60]}...")
+                            return originalRender.apply(this, arguments);
+                        };
+                    }
                     
-            except Exception as e:
-                logging.warning(f"Initial Sign In attempt failed: {e}")
-
-            # Try direct API login as last resort (before CAPTCHA checks)
-            # This might work if VFS's API doesn't require CAPTCHA token
-            try:
-                api_login_result = page.evaluate(f"""
-                    async () => {{
-                        try {{
-                            const response = await fetch('https://lift-api.vfsglobal.com/user/login', {{
-                                method: 'POST',
-                                headers: {{
-                                    'Content-Type': 'application/json',
-                                    'Origin': 'https://visa.vfsglobal.com',
-                                    'Referer': 'https://visa.vfsglobal.com/'
-                                }},
-                                body: JSON.stringify({{
-                                    username: '{email}',
-                                    password: '{password}',
-                                    missionCode: 'NGA',
-                                    countryCode: 'DEU'
-                                }})
-                            }});
-                            const data = await response.json();
-                            return {{ status: response.status, data: data }};
-                        }} catch(e) {{
-                            return {{ error: e.message }};
-                        }}
-                    }}
-                """)
-                logging.info(f"Direct API login attempt: {api_login_result}")
-                
-                if api_login_result and isinstance(api_login_result, dict):
-                    if api_login_result.get('status') == 200:
-                        logging.info("Direct API login succeeded! Refreshing page...")
-                        page.reload()
-                        time.sleep(3)
-                        if "login" not in page.url.lower():
-                            return  # Success!
-            except Exception as e:
-                logging.warning(f"Direct API login failed: {e}")
-
-            # Check for any sitekeys captured by init script from turnstile.render() calls
-            early_captured_sitekeys = page.evaluate("""
-                () => window.__capturedTurnstileSitekeys || []
+                    // Also watch for turnstile to be defined later
+                    const origDefineProperty = Object.defineProperty;
+                    try {
+                        Object.defineProperty(window, 'turnstile', {
+                            set: function(val) {
+                                if (val && val.render) {
+                                    const originalRender = val.render;
+                                    val.render = function(container, params) {
+                                        if (params && params.sitekey) {
+                                            window.__capturedTurnstileSitekeys.push(params.sitekey);
+                                            console.log('Captured Turnstile sitekey (late):', params.sitekey);
+                                        }
+                                        return originalRender.apply(this, arguments);
+                                    };
+                                }
+                                this._turnstile = val;
+                            },
+                            get: function() { return this._turnstile; },
+                            configurable: true
+                        });
+                    } catch(e) {
+                        // Property might already be defined
+                    }
+                }
             """)
-            if early_captured_sitekeys:
-                logging.info(f"Init script captured {len(early_captured_sitekeys)} sitekey(s): {early_captured_sitekeys[0][:25]}...")
-                captured_sitekeys.extend(early_captured_sitekeys)
 
             # Check for and solve Cloudflare Turnstile CAPTCHA on the login form
             from .captcha_solver import extract_turnstile_sitekey, inject_turnstile_token
@@ -376,14 +230,6 @@ class VfsBotDE(VfsBot):
             turnstile_ready = False
             for wait_attempt in range(15):  # Extended to 15 seconds
                 time.sleep(1)
-                
-                # Check for newly captured sitekeys from init script
-                new_sitekeys = page.evaluate("() => window.__capturedTurnstileSitekeys || []")
-                if new_sitekeys and new_sitekeys not in captured_sitekeys:
-                    for sk in new_sitekeys:
-                        if sk not in captured_sitekeys:
-                            captured_sitekeys.append(sk)
-                            logging.info(f"Captured sitekey during wait: {sk[:25]}...")
                 
                 # Check multiple indicators that Turnstile is ready
                 ready_status = page.evaluate("""
@@ -435,105 +281,6 @@ class VfsBotDE(VfsBot):
             # If Turnstile not ready yet, try to trigger it manually
             if not turnstile_ready:
                 logging.info("Turnstile not ready - attempting to trigger render...")
-                
-                # VFS uses Angular - try to find and trigger their captcha service
-                # Also try to get the sitekey from Angular's environment/config
-                sitekey_from_angular = page.evaluate("""
-                    () => {
-                        // Method 1: Check for VFS's Angular environment service
-                        try {
-                            // Angular apps often store config in ng-state or similar
-                            const ngState = document.querySelector('script#ng-state');
-                            if (ngState) {
-                                const state = JSON.parse(ngState.textContent);
-                                if (state && state.turnstileSiteKey) return state.turnstileSiteKey;
-                            }
-                        } catch(e) {}
-                        
-                        // Method 2: Check window.__env or similar global config
-                        const configKeys = ['__env', 'environment', 'ENV', 'appConfig', '__APP_CONFIG__'];
-                        for (const key of configKeys) {
-                            try {
-                                if (window[key]) {
-                                    const cfg = window[key];
-                                    if (cfg.turnstileSiteKey) return cfg.turnstileSiteKey;
-                                    if (cfg.turnstile && cfg.turnstile.siteKey) return cfg.turnstile.siteKey;
-                                    if (cfg.captcha && cfg.captcha.siteKey) return cfg.captcha.siteKey;
-                                }
-                            } catch(e) {}
-                        }
-                        
-                        // Method 3: Try to access Angular's injector to get config service
-                        try {
-                            const appRoot = document.querySelector('app-root');
-                            if (appRoot && appRoot.__ngContext__) {
-                                // Angular stores component context here
-                                // Try to find environment config in the injector
-                            }
-                        } catch(e) {}
-                        
-                        // Method 4: Check for any element with ng-reflect that might have sitekey
-                        const allElements = document.querySelectorAll('*');
-                        for (const el of allElements) {
-                            for (const attr of el.attributes) {
-                                if (attr.name.includes('sitekey') || attr.name.includes('siteKey')) {
-                                    if (attr.value && attr.value.startsWith('0x')) {
-                                        return attr.value;
-                                    }
-                                }
-                            }
-                        }
-                        
-                        return null;
-                    }
-                """)
-                
-                if sitekey_from_angular:
-                    logging.info(f"Found sitekey from Angular: {sitekey_from_angular[:25]}...")
-                    captured_sitekeys.append(sitekey_from_angular)
-                
-                # VFS uses volt-recaptcha - try to trigger Angular to render it
-                page.evaluate("""
-                    () => {
-                        // Find the volt-recaptcha element and try to trigger Angular
-                        const voltEl = document.getElementById('volt-recaptcha');
-                        if (voltEl) {
-                            console.log('[VFS-Bot] Found volt-recaptcha element');
-                            
-                            // Try to trigger Angular change detection
-                            try {
-                                const appRoot = document.querySelector('app-root');
-                                if (appRoot) {
-                                    // Dispatch an event to trigger Angular's zone
-                                    appRoot.dispatchEvent(new Event('input', { bubbles: true }));
-                                }
-                            } catch(e) {}
-                            
-                            // If turnstile is available, try to render it on volt-recaptcha
-                            if (window.turnstile && window.turnstile.render) {
-                                console.log('[VFS-Bot] Attempting to render turnstile on volt-recaptcha');
-                                try {
-                                    // Check if there's a parent container with sitekey
-                                    const container = voltEl.closest('[data-sitekey]') || voltEl.parentElement;
-                                    if (container && !container.querySelector('iframe[src*="cloudflare"]')) {
-                                        window.turnstile.render(container);
-                                    }
-                                } catch(e) {
-                                    console.log('[VFS-Bot] Turnstile render error:', e);
-                                }
-                            }
-                        }
-                    }
-                """)
-                time.sleep(2)
-                
-                # Check if any sitekeys were captured after trigger attempt
-                new_sitekeys = page.evaluate("() => window.__capturedTurnstileSitekeys || []")
-                if new_sitekeys:
-                    for sk in new_sitekeys:
-                        if sk not in captured_sitekeys:
-                            captured_sitekeys.append(sk)
-                            logging.info(f"Captured sitekey after trigger: {sk[:25]}...")
                 
                 # First try to click on the Turnstile area to trigger it
                 try:
@@ -854,32 +601,49 @@ class VfsBotDE(VfsBot):
                             bundle_content = resp.text
                             import re
                             
-                            # IMPORTANT: The 0x2/0x3 strings in VFS bundle are NOT real Cloudflare sitekeys
-                            # They appear to be obfuscated variable names. Real Cloudflare Turnstile 
-                            # sitekeys start with 0x4AAAA... Skip the 0x2/0x3 patterns.
-                            
-                            # Only look for standard Cloudflare Turnstile sitekeys (0x4...)
-                            matches = re.findall(r'0x4[A-Za-z0-9_-]{25,50}', bundle_content)
+                            # VFS uses sitekeys starting with 0x2 or 0x3 (not typical 0x4AAAA)
+                            # Find all potential sitekeys in bundle
+                            matches = re.findall(r'0x[23][A-Za-z0-9_-]{30,60}', bundle_content)
                             
                             if matches:
-                                for m in matches:
-                                    if len(m) >= 30:
-                                        sitekey = m
-                                        logging.info(f"Found 0x4 sitekey in bundle: {sitekey[:25]}...")
-                                        break
-                                
-                                if sitekey:
-                                    logging.info(f"Total 0x4 sitekeys found: {len(matches)}")
-                            else:
-                                logging.info("No valid 0x4 Cloudflare sitekeys found in bundle")
+                                # Filter to likely Turnstile sitekeys (40+ chars, contain mix of chars)
+                                valid_sitekeys = [m for m in matches if len(m) >= 40 and len(m) <= 70]
+                                if valid_sitekeys:
+                                    # Use first valid one
+                                    sitekey = valid_sitekeys[0]
+                                    logging.info(f"Found sitekey in Angular bundle: {sitekey[:30]}...")
+                                    logging.info(f"Total potential sitekeys found: {len(valid_sitekeys)}")
+                            
+                            # If no 0x2/0x3... found, try 0x4 pattern (standard Cloudflare)
+                            if not sitekey:
+                                matches = re.findall(r'0x4[A-Za-z0-9_-]{25,50}', bundle_content)
+                                if matches:
+                                    for m in matches:
+                                        if len(m) >= 30:
+                                            sitekey = m
+                                            logging.info(f"Found 0x4 sitekey in bundle: {sitekey[:25]}...")
+                                            break
                     except Exception as e:
                         logging.warning(f"Failed to fetch Angular bundle: {e}")
                 
-                # NOTE: The strings starting with 0x2/0x3 in VFS bundle are NOT valid Cloudflare 
-                # Turnstile sitekeys - they appear to be obfuscated JavaScript variable names.
-                # Real Cloudflare Turnstile sitekeys typically start with 0x4AAAA...
+                # KNOWN VFS SITEKEYS FALLBACK - these are from the VFS Angular bundle
+                if not sitekey:
+                    logging.info("Trying known VFS sitekeys...")
+                    # These sitekeys were extracted from VFS's Angular bundle
+                    known_vfs_sitekeys = [
+                        "0x2DYCf9HBhbOyv9PzciSiM1HBMrHDg9YEsi6Dhj1zx1DlcjLDMvUDci6iK9ot",
+                        "0x2DYCf9HBhbOyv9PzciSiM1HBMrHDg9YEsi6zMfSC2v9lhSIA2v5iJOIzg9JD",
+                        "0x2fSCgHHx2LKiIWIBwfUzgf0B3j5iJP0CNvLFsX7iMTLEsi6iMfWCgXPy2fUD",
+                        "0x29Mx2rLCgfYDhvYzsiSiM1LC3nHz2uIoIjHChbSAwnHBNrjBMzVCM1HDgLVB",
+                    ]
+                    # Try first one
+                    sitekey = known_vfs_sitekeys[0]
+                    logging.info(f"Using known VFS sitekey: {sitekey[:30]}...")
                 
-                # Last resort: Try to get sitekey from window at runtime
+                # Last resort: Use known VFS Global sitekey (they often use same one)
+                # This is a common public sitekey found in VFS deployments
+                if not sitekey:
+                    # Try to get it from window at runtime
                     sitekey = page.evaluate("""
                         () => {
                             // Check if turnstile.render was called - we can intercept it
@@ -1178,61 +942,6 @@ class VfsBotDE(VfsBot):
             
             if sign_in_btn:
                 remove_overlay()  # Remove again right before click
-                
-                # Check if button is disabled
-                is_disabled = sign_in_btn.is_disabled()
-                logging.info(f"Sign In button disabled: {is_disabled}")
-                
-                if is_disabled:
-                    logging.info("Button is disabled - trying to enable it...")
-                    # Try to enable the button and trigger Turnstile
-                    page.evaluate("""
-                        () => {
-                            // Find and enable the button
-                            const btn = document.querySelector('button[type="submit"]') || 
-                                       document.querySelector('button.mat-raised-button') ||
-                                       Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Sign In'));
-                            if (btn) {
-                                btn.disabled = false;
-                                btn.removeAttribute('disabled');
-                                btn.classList.remove('mat-button-disabled');
-                                console.log('Button enabled');
-                            }
-                            
-                            // Try to trigger Turnstile if it exists but hasn't rendered
-                            if (window.turnstile) {
-                                try {
-                                    // Get all containers that might need Turnstile
-                                    const containers = document.querySelectorAll('#volt-recaptcha, .captcha-container, [class*="turnstile"]');
-                                    containers.forEach(c => {
-                                        if (!c.querySelector('iframe[src*="cloudflare"]')) {
-                                            console.log('Triggering turnstile.render on', c);
-                                            // Try to render with a known callback
-                                            window.turnstile.render(c, {
-                                                callback: function(token) {
-                                                    console.log('Turnstile solved, token:', token.substring(0, 20));
-                                                    // Try to submit form
-                                                    const form = document.querySelector('form');
-                                                    if (form) form.submit();
-                                                }
-                                            });
-                                        }
-                                    });
-                                } catch(e) {
-                                    console.log('Turnstile render error:', e);
-                                }
-                            }
-                        }
-                    """)
-                    time.sleep(3)  # Wait for Turnstile to potentially render/solve
-                
-                # Check button state again
-                try:
-                    is_still_disabled = page.locator("button:has-text('Sign In')").first.is_disabled()
-                    logging.info(f"Sign In button still disabled after enable attempt: {is_still_disabled}")
-                except:
-                    pass
-                
                 # Use JavaScript click to bypass overlay
                 page.evaluate("""
                     const btn = document.querySelector('button[type="submit"]') || 
@@ -1241,46 +950,6 @@ class VfsBotDE(VfsBot):
                     if (btn) btn.click();
                 """)
                 logging.info("Clicked sign in button via JavaScript")
-                
-                # Wait and check if Turnstile challenge appears
-                time.sleep(2)
-                
-                # Check if Turnstile iframe now has src (rendered after form interaction)
-                iframe_check = page.evaluate("""
-                    () => {
-                        const iframes = document.querySelectorAll('iframe');
-                        for (const f of iframes) {
-                            if (f.src && f.src.includes('challenges.cloudflare')) {
-                                return f.src;
-                            }
-                        }
-                        return null;
-                    }
-                """)
-                
-                if iframe_check:
-                    logging.info(f"Turnstile iframe appeared after click: {iframe_check[:50]}...")
-                    # Extract sitekey and solve if we can
-                    import re
-                    match = re.search(r'[?&]sitekey=([^&]+)', iframe_check)
-                    if match:
-                        sitekey = match.group(1)
-                        logging.info(f"Found sitekey in iframe: {sitekey[:25]}...")
-                        
-                        # Try to solve
-                        if self.captcha_solver.is_configured:
-                            solution = self.captcha_solver.solve_turnstile(sitekey=sitekey, url=page.url)
-                            if solution.success and solution.token:
-                                logging.info(f"CAPTCHA solved after form click: {solution.solve_time:.1f}s")
-                                inject_turnstile_token(page, solution.token)
-                                time.sleep(2)
-                                # Click again after solving
-                                page.evaluate("""
-                                    const btn = document.querySelector('button[type="submit"]');
-                                    if (btn) btn.click();
-                                """)
-                            else:
-                                logging.warning(f"CAPTCHA solve failed: {solution.error}")
             else:
                 logging.warning("Could not find sign in button, trying Enter key")
                 # Use JavaScript to submit form

@@ -1,18 +1,29 @@
 import { createServerSupabase } from "@/lib/supabase";
 import { NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
 
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    // Get the current user's session
+    const session = await auth();
+    
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    }
+
+    const userId = session.user.id;
     const { id } = await params;
     const supabase = createServerSupabase();
 
+    // Only fetch the booking if it belongs to the current user
     const { data: booking, error } = await supabase
       .from("booking")
       .select("*")
       .eq("id", id)
+      .eq("userId", userId)
       .single();
 
     if (error) {

@@ -54,15 +54,18 @@ function formatDuration(isoDuration: string): string {
 }
 
 function getStatusBadge(status: Booking["status"]) {
-  const styles: Record<Booking["status"], { bg: string; text: string; label: string }> = {
+  const styles: Record<string, { bg: string; text: string; label: string }> = {
     ticketed: { bg: "bg-green-500/10", text: "text-green-400", label: "Confirmed" },
+    confirmed: { bg: "bg-green-500/10", text: "text-green-400", label: "Confirmed" },
     processing: { bg: "bg-yellow-500/10", text: "text-yellow-400", label: "Processing" },
-    pending_payment: { bg: "bg-orange-500/10", text: "text-orange-400", label: "Pending" },
+    pending: { bg: "bg-orange-500/10", text: "text-orange-400", label: "Pending" },
+    pending_payment: { bg: "bg-orange-500/10", text: "text-orange-400", label: "Pending Payment" },
     failed: { bg: "bg-red-500/10", text: "text-red-400", label: "Failed" },
+    cancelled: { bg: "bg-zinc-500/10", text: "text-zinc-400", label: "Cancelled" },
     refund_pending: { bg: "bg-purple-500/10", text: "text-purple-400", label: "Refund Pending" },
     refunded: { bg: "bg-zinc-500/10", text: "text-zinc-400", label: "Refunded" },
   };
-  return styles[status] || styles.pending_payment;
+  return styles[status] || styles.pending;
 }
 
 function getCabinTag(cabinClass: string): string {

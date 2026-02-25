@@ -4,7 +4,7 @@ export interface Booking {
   userId: string;
   chatId: string;
   offerId: string;
-  status: "pending_payment" | "processing" | "ticketed" | "failed" | "refund_pending" | "refunded";
+  status: "pending" | "pending_payment" | "processing" | "ticketed" | "confirmed" | "failed" | "cancelled" | "refund_pending" | "refunded";
   reference: string | null;
   totalAmount: string;
   totalCurrency: string;

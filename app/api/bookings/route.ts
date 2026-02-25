@@ -19,7 +19,7 @@ export async function GET() {
       .from("booking")
       .select("*")
       .eq("userId", userId)
-      .in("status", ["ticketed", "processing", "pending_payment", "failed", "refunded", "refund_pending"])
+      .in("status", ["ticketed", "confirmed", "processing", "pending", "pending_payment", "failed", "refunded", "refund_pending", "cancelled"])
       .order("createdAt", { ascending: false })
       .limit(50);
 
